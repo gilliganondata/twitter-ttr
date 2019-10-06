@@ -3,7 +3,7 @@ title: "Calculating (Twitter) Vocabulary Breadth of U.S. Presidential Candidates
 output: html_notebook
 ---
 
-A recent podcast referenced Donald Trump's limited vocabulary in his tweets. The implication was that, relatively speaking, he used a limited number of unique words. This led me to wonder how that  could be quantified and checked. Which, as tends to happen, led to a passing discussion with [Joe Sutherland](https://twitter.com/J0eSutherland), the head of the data science at my company, and he immediately noted, "That sounds like a TTR question." And he was right (I'd never heard of TTR, but, then again, I'm not a data scientist nor an NLP expert).
+A recent podcast referenced Donald Trump's limited vocabulary in his tweets. The implication was that, relatively speaking, he used a limited number of unique words. This led me to wonder how that  could be quantified and checked. Which, as tends to happen, led to a passing discussion with [Joe Sutherland](https://twitter.com/J0eSutherland), the head of data science at [Search Discovery](https://searchdiscovery.com), and he immediately noted, "That sounds like a TTR question." And he was right (I'd never heard of TTR, but, then again, I'm not a data scientist nor an NLP expert).
 
 That little [If You Give a Pig a Pancake](https://www.amazon.com/If-You-Give-Pig-Pancake/dp/0060266864) scenario then resulted in some research, some R, the remainder of this post, and my [podcast](https://analyticshour.io) co-hosts questioning how I choose to spend my free time on the weekends.
 
@@ -77,19 +77,18 @@ theme_main <- theme_light() +
 
 ## Function to Calculate the TTR
 
-Ultimately, we're looking for `r num_tweets` tweets of original text (there's no magic to this -- it just seemed like a reasonable count to work with), so we pull ~_`r num_tweets * 2.5`, remove the retweets, and see what we've got left. Because we're going to do this for multiple accounts, we set it up as a function that takes a username as an input and returns a single-row data frame with the username, the total words used in the 200 tweets, the number of _unique_ words used in those tweets, and the TTR.
+Ultimately, we're looking for `r num_tweets` tweets of original text (there's no magic to this -- it just seemed like a reasonable count to work with), so we pull ~`r num_tweets * 2.5`, remove the retweets, and see what we've got left. Because we're going to do this for multiple accounts, we set it up as a function that takes a username as an input and returns a single-row data frame with the username, the total words used in the `r num_tweets` tweets, the number of _unique_ words used in those tweets, the TTR, and a couple of data checks.
 
 ```{r calc_ttr}
 # Function to calculate the TTR
 get_ttr <- function(username){
   
-  # Get the tweets. For some reason, when you specify 500 it returns
-  # 599. That's fine. We just want extras so we can discard retweets and
-  # still have at least 200 left.
+  # Get the tweets. W want extras so we can discard retweets and
+  # still have at least num_tweets left.
   tweets_df <- get_timeline(username, n=num_tweets*2.5)
   
   # Remove the retweets, remove tweets from the current day for ease o
-  # replicability, and select the most recent 200 remaining tweets
+  # replicability, and select the most recent num_tweets remaining tweets
   tweets_df <- tweets_df %>% 
     filter(is_retweet == FALSE & as.Date(created_at) < Sys.Date()) %>% 
     top_n(n = num_tweets, wt = created_at)
@@ -197,7 +196,7 @@ Now we see that Andrew Yang, who had the highest TTR, also had far and away the 
 
 A visual inspection of Yang's Twitter feed turns up that he is actually brevity-biased, with quick notes and thoughts that cross his mind (e.g., ["Why do I feel like I have to see Joker."](https://twitter.com/AndrewYang/status/1180600460098424832) -- brief and punctuation-challenged to boot.)
 
-On the other extreme, Bernie Sanders had far and away the _most_ words across his most recent 200 tweets. A manual of his Twitter feed shows that, unlike Yang, his tweets are fully formed thoughts/commentary about the various issues that are at the core of his platform (often commenting on current events and making the link to his proposed policies...which requires more words than an idle musing).
+On the other extreme, Bernie Sanders had far and away the _most_ words across his most recent `r num_tweets` tweets. A manual inspection of his Twitter feed shows that, unlike Yang, his tweets are fully formed thoughts/commentary about the various issues that are at the core of his platform (often commenting on current events and making the link to his proposed policies...which requires more words than an idle musing).
 
 >_**Side Note:** From the table above, Yang and Trump were the two "fastest to `r num_tweets`" users. Sanders was actually the slowest to hit that volume of non-retweet tweets._
 
@@ -252,7 +251,7 @@ In general, Donald Trump uses fewer words per tweet than any of the Democratic p
 
 When it comes to the number of _unique words_ Trump uses in Tweets as normalized by the total words he uses, he's pretty much middle of the road with those candidates.
 
-And, of course, I had to check where I, personally, netted out, so I ran the analysis on [@tgwilson](https://twitter.com/tgwilson), too. I came out with a **TTR of 35.7%** (which is above even Yang) with **4,597 total words**, which is a dead heat with Trump. If I'd thrown myself into the correlation assessment, it would have simply muddied the waters further.
+And, of course, I had to check where I, personally, netted out, so I ran the analysis on @[tgwilson](https://twitter.com/tgwilson), too. I came out with a **TTR of 35.5%** (which is above even Yang) with **4,642 total words**, which is a dead heat with Trump. If I'd thrown myself into the correlation assessment, it would have simply muddied the waters further.
 
-I like TTR, though. It's a simple idea, simple to calculate (it's even a function in the `koRpus` package, but it's so easy to calculate that it didn't seem warranted to add another package to the mix).
+I like TTR, though. It's a simple idea, simple to calculate (it's even a function in the `koRpus` package, but it's so easy to calculate that it didn't seem warranted to add another package to the mix), and straightforward to interpret.
 
