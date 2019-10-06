@@ -1,0 +1,155 @@
+---
+title: "Calculating (Twitter) Vocabulary Breadth of U.S. Presidential Candidates Using TTR"
+output: html_notebook
+---
+
+I was listening to a podcast that referenced Donald Trump's limited vocabulary in his tweets. It was implied that this was a fact -- that, relatively speaking, he used a limited number of unique words. I wondered if this was something that could be quantified and confirmed. That led to a passing discussion with [Joe Sutherland](https://twitter.com/J0eSutherland), the head of the data science department where I work, and he immediately noted, "That sounds like a TTR question." And he was right (I'd never heard of TTR, but, then again, I'm not a data scientist nor an NLP expert).
+
+Calculating the TTR just for Trump's tweets would just be a number that was greater than 0 and less than or equal to 1, so I'd need some context. So, I also calculated the TTR for the 12 Democratic candidates who have made the cut to be on the debate stage on October 15, 2019.
+
+## What is TTR?
+
+The Type-Token Ratio (TTR) is a pretty simple calculation. It is a measure of how many _unique_ words are used in a corpus relative to the _total_ words in the corpus. There is a detailed write-up of the process [here](https://www.sltinfo.com/type-token-ratio/), but the formula is really simple:
+
+$$\frac{Number\ of\ Unique\ Words}{Total\ Words}\times100$$
+
+As a silly, simple example, let's use: `The quick brown fox jumps over the lazy dog`. The word "the" is the only word used more than once in this sentence.
+
+$${Number\ of\ Unique\ Words}=8$$
+$${Total\ Words}=9$$
+$${TTR}=\frac{8}{9}\times100=88.9\%$$
+A **low TTR** means that _there are words that are used again and again_ in the data, while a **high TTR** (maximum of 100%) means that _few words are repeated_.
+
+```{r setup}
+
+# Load the necessary libraries. 
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(rtweet,        # How we actually get the Twitter data
+               tidyverse, 
+               scales,
+               tidytext)      # Text Analysis 
+
+# Set users to assess
+user_highlight <- "realdonaldtrump"   # The primary user of interest for comparison
+users_compare <- c("joebiden", "corybooker", "petebuttigieg", "juliancastro", 
+                   "tulsigabbard", "kamalaharris", "amyklobuchar", "betoorourke",
+                   "sensanders", "tomsteyer", "ewarren", "andrewyang")
+
+# Make a vector of all users to query
+users <- c(user_highlight, users_compare)
+
+# Add the "@" to the user_highlight for ease of use later
+user_highlight <- paste0("@", user_highlight)
+
+# Get app credentials
+
+# Name assigned to created app. You'll need to set these up in the Twitter
+# developer console and then either hardcode them here or put them in your 
+# .Renviron file.
+tw_appname <- Sys.getenv("TWITTER_APPNAME")
+
+# Key and Secret
+tw_key <- Sys.getenv("TWITTER_KEY")
+tw_secret <- Sys.getenv("TWITTER_SECRET")
+tw_access_token = Sys.getenv("TWITTER_ACCESS_TOKEN")
+tw_access_secret = Sys.getenv("TWITTER_ACCESS_SECRET")
+
+# Create the token. 
+tw_token <- create_token(
+  app = tw_appname,
+  consumer_key = tw_key,
+  consumer_secret = tw_secret,
+  access_token = tw_access_token,
+  access_secret = tw_access_secret)
+```
+
+## Function to Calculate the TTR
+
+Ultimately, we're looking for 200 tweets of original text, so we pull 500, remove the retweets, and see what we've got left.
+
+```{r calc_ttr}
+
+# Function to calculate the TTR
+get_ttr <- function(username){
+  
+  # Get the tweets. For some reason, when you specify 500 it returns
+  # 599. That's fine. We just want extras so we can discard retweets and
+  # still have at least 200 left.
+  tweets_df <- get_timeline(username, n=500)
+  
+  # Remove the retweets
+  tweets_df <- tweets_df %>% 
+    filter(is_retweet == FALSE)
+  
+  # Just work with the last 200
+  tweets_df <- tweets_df[1:200,]
+  
+  # Work with just the text field. Remove Twitter usernames referenced
+  # and links.
+  tweets_text <- tweets_df %>% 
+    select(text) %>% 
+    mutate(text = gsub("@\\S+","", text)) %>% 
+    mutate(text = gsub("https://t.co/.{10}", "", text))
+  
+  # Convert the tweet text into individual words. This drops punctuation
+  # marks and, by default, converts all words to lowercase (which is what we want).
+  all_words <- tweets_text %>% 
+    unnest_tokens(output=word, input=text)
+  
+  # De-duplicate to get a list with the unique words
+  unique_words <- all_words %>% 
+    group_by(word) %>% 
+    summarise()
+  
+  # Calculate the TTR
+  ttr <- nrow(unique_words) / nrow(all_words)
+  
+  # Return a data frame with the details
+  ttr_df <- data.frame(username = paste0("@",username),
+                       unique_words = nrow(unique_words),
+                       all_words = nrow(all_words),
+                       ttr = round(ttr,3),
+                       stringsAsFactors = FALSE)
+}
+```
+
+# Get the results
+
+```{r get_results, fig.height = 6, fig.width = 8, echo = TRUE, warning = FALSE}
+
+# Calculate the TTR for all users
+ttr_df <- map_dfr(users, get_ttr)
+
+# Reorder descending by TTR and add columns that are JUST @realdonaldtrump 
+# values for highlighting those values in plots
+ttr_df <- ttr_df %>% arrange(ttr) %>%
+  mutate(username = factor(username, levels = username),
+         highlight_ttr = ifelse(username == user_highlight, ttr, NA),
+         highlight_unique_words = ifelse(username == user_highlight, unique_words, NA),
+         highlight_all_words = ifelse(username == user_highlight, all_words, NA))
+
+# Plot the results
+gg <- ggplot(ttr_df, aes(x = username, y = ttr, label = scales::percent(ttr))) +
+  geom_bar(stat = "identity", fill = "gray80") +
+  # Highlight the user that is of interest
+  geom_bar(stat = "identity", mapping = aes(y = highlight_ttr), fill = "#0060af") +
+  geom_text(nudge_y = 0.015, size = 8, fontface = "bold") +
+  geom_hline(yintercept = 0) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0), limits = c(0, max(ttr_df$ttr) + 0.05)) +
+  labs(title = "Type-Text Ratio (TTR) by Username", 
+       subtitle = paste("Most Recent 200 Tweets as of", Sys.Date(), 
+                        "(Excluding Retweets)")) +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 24),
+        plot.subtitle = element_text(hjust = 0.5, face = "italic", size = 20),
+        panel.border = element_blank(),
+        axis.title = element_blank(),
+        axis.text.y = element_text(face = "bold", size = 20),
+        axis.text.x = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank())
+
+gg
+
+```
