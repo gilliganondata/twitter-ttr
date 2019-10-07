@@ -1,9 +1,12 @@
 ---
 title: "Calculating (Twitter) Vocabulary Breadth of U.S. Presidential Candidates Using TTR"
-output: html_notebook
+output: 
+  html_notebook:
+    includes:
+      in_header: header.html
 ---
 
-A recent podcast referenced Donald Trump's limited vocabulary in his tweets. The implication was that, relatively speaking, he used a limited number of unique words. This led me to wonder how that  could be quantified and checked. Which, as tends to happen, led to a passing discussion with [Joe Sutherland](https://twitter.com/J0eSutherland), the head of data science at [Search Discovery](https://searchdiscovery.com), and he immediately noted, "That sounds like a TTR question." And he was right (I'd never heard of TTR, but, then again, I'm not a data scientist nor an NLP expert).
+A recent podcast referenced Donald Trump's limited vocabulary in his tweets (I honestly don't remember exactly which one). The implication was that, relatively speaking, he used a limited number of unique words. This led me to wonder how that  could be quantified and checked. Which, as tends to happen, led to a passing discussion with [Joe Sutherland](https://twitter.com/J0eSutherland), the head of data science at [Search Discovery](https://searchdiscovery.com), and he immediately noted, "That sounds like a TTR question." And he was right (I'd never heard of TTR, but, then again, I'm not a data scientist nor an NLP expert).
 
 That little [If You Give a Pig a Pancake](https://www.amazon.com/If-You-Give-Pig-Pancake/dp/0060266864) scenario then resulted in some research, some R, the remainder of this post, and my [podcast](https://analyticshour.io) co-hosts questioning how I choose to spend my free time on the weekends.
 
@@ -83,11 +86,11 @@ Ultimately, we're looking for `r num_tweets` tweets of original text (there's no
 # Function to calculate the TTR
 get_ttr <- function(username){
   
-  # Get the tweets. W want extras so we can discard retweets and
+  # Get the tweets. We want extras so we can discard retweets and
   # still have at least num_tweets left.
   tweets_df <- get_timeline(username, n=num_tweets*2.5)
   
-  # Remove the retweets, remove tweets from the current day for ease o
+  # Remove the retweets, remove tweets from the current day for ease of
   # replicability, and select the most recent num_tweets remaining tweets
   tweets_df <- tweets_df %>% 
     filter(is_retweet == FALSE & as.Date(created_at) < Sys.Date()) %>% 
@@ -97,8 +100,8 @@ get_ttr <- function(username){
   # and links.
   tweets_text <- tweets_df %>% 
     select(text) %>% 
-    mutate(text = gsub("@\\S+","", text)) %>% 
-    mutate(text = gsub("https://t.co/.{10}", "", text))
+    mutate(text = gsub("@\\S+","", text)) %>%              # Remove usernames
+    mutate(text = gsub("https://t.co/.{10}", "", text))    # Remove links
   
   # Convert the tweet text into individual words. This drops punctuation
   # marks and, by default, converts all words to lowercase (which is what we want).
