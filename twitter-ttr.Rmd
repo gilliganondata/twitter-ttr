@@ -1,5 +1,6 @@
 ---
 title: "Calculating (Twitter) Vocabulary Breadth of U.S. Presidential Candidates Using TTR"
+author: "Tim Wilson (@tgwilson)"
 output: 
   html_notebook:
     includes:
