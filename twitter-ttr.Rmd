@@ -235,7 +235,7 @@ gg <- ggplot(ttr_df, aes(x = all_words, y = ttr, label = username)) +
 gg
 ```
 
-Interesting. It's starting to look like there _might_ be an inverse correlation. Andrew Yang may be an outlier on that front (as might be Bernie Sanders). But, let's do a simple check of the correlation coefficient with and without the outliers.
+Interesting. And, logically, this makes some sense: the more words you use, the more likely you will be going back to the well of previous words used (plus, the more you'll be using common articles, prepositions, conjuctions, etc.). It's starting to look like there _might_ be an inverse correlation. Andrew Yang may be an outlier on that front (as might be Bernie Sanders). But, let's do a simple check of the correlation coefficient with and without the outliers.
 
 The correlation coefficient between `Total Words` and `TTR` for all users is <strong>`r cor(ttr_df$all_words, ttr_df$ttr)`</strong>.
 
