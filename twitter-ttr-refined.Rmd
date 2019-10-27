@@ -1,0 +1,375 @@
+---
+title: "Calculating (Twitter) Vocabulary Breadth of U.S. Presidential Candidates Using TTR"
+author: "Tim Wilson (@tgwilson)"
+output: 
+  html_notebook:
+    includes:
+      in_header: header.html
+---
+
+A recent podcast referenced Donald Trump's limited vocabulary in his tweets (I honestly don't remember exactly which one). The implication was that, relatively speaking, he used a limited number of unique words. This led me to wonder how that  could be quantified and checked. Which, as tends to happen, led to a passing discussion with [Joe Sutherland](https://twitter.com/J0eSutherland), the head of data science at [Search Discovery](https://searchdiscovery.com), and he immediately noted, "That sounds like a TTR question." And he was right (I'd never heard of TTR, but, then again, I'm not a data scientist nor an NLP expert).
+
+That little [If You Give a Pig a Pancake](https://www.amazon.com/If-You-Give-Pig-Pancake/dp/0060266864) scenario then resulted in some research, some R, the remainder of this post, and my [podcast](https://analyticshour.io) co-hosts questioning how I choose to spend my free time on the weekends.
+
+## What is TTR?
+
+The Type-Token Ratio (TTR) is a pretty simple calculation. It is a measure of how many _unique_ words are used in a corpus relative to the _total_ words in the corpus. There is a detailed write-up of the process [here](https://www.sltinfo.com/type-token-ratio/), but the formula is really simple:
+
+$$\frac{Number\ of\ Unique\ Words}{Total\ Words}\times100$$
+
+As a silly, simple example, let's use: `The quick brown fox jumps over the lazy dog`. The word "the" is the only word used more than once in this sentence.
+
+$${Number\ of\ Unique\ Words}=8$$
+$${Total\ Words}=9$$
+$${TTR}=\frac{8}{9}\times100=88.9\%$$
+A **low TTR** means that _there are more words that are used again and again_ in the data, while a **high TTR** (maximum of 100%) means that _few words are repeated in the dataset_.
+
+**An Important Characteristic of TTR**: While it's alluring in its simplicity, it does have an important limitation, in that the more raw text there is in the "document" being evaluated, all things being equal, the _lower_ the TTR will be, as the denominator grows with each additional word in the document. This wasn't immediately obvious to me, but it became apparent in my initial stab at this analysis. We'll come back to this important detail later.
+
+## The Approach: Trump's TTR vs. a Comparison Set
+
+Calculating the TTR solely for Trump's tweets would just return a percentage, which wouldn't be particularly enlightening. We'll need some context. The approach I took was to also calculate and examine the TTR for each of the 12 Democratic candidates who made the cut to be on the Democratic debate stage on October 15, 2019. These felt like they were a good comparison set, as I'm focusing on "reasonably viable candidates who are attempting to win the U.S. Presidential election in 2020."
+
+## Setup to Get the Data
+
+There's a little bit of setup required to use `rtweet`, in that a (free) app has to be created in the [Twitter Developer Console](https://developer.twitter.com/en/apps). The credentials for that app can then be stored in a `.Renviron` file and then read in with `Sys.getenv()`.
+
+And, to make the code repurposable, we specify a single Twitter account that is the primary account of interest, and then a vector of accounts to use for context/comparison.
+
+```{r setup}
+
+# Load the necessary libraries. 
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(rtweet,        # How we actually get the Twitter data
+               tidyverse, 
+               scales,        # % formatting in visualizations
+               knitr,         # Eye-friendly tables
+               kableExtra,    # More eye-friendly tables
+               ggforce,       # Simpler labels on a scatterplot
+               tidytext)      # Text analysis 
+
+## SETTINGS #########################
+
+# Set the number of total words to use for the TTR and the number of tweets to work with.
+num_words <- 2500
+num_tweets <- 200
+
+# Estimated words per tweet. Ultimately, we're going to work with word counts, but
+# we have to query the API for a number of tweets. This value can be left as is -- it's
+# a pretty conservative (low) estimate.
+words_per_tweet <- 15
+
+# Set users to assess
+user_highlight <- "realdonaldtrump"   # The primary user of interest for comparison
+users_compare <- c("joebiden", "corybooker", "petebuttigieg", "juliancastro", 
+                   "tulsigabbard", "kamalaharris", "amyklobuchar", "betoorourke",
+                   "sensanders", "tomsteyer", "ewarren", "andrewyang")
+
+## END SETTINGS #########################
+
+# Calculate the # of tweets to pull. This is overly convoluted, but we want to pull
+# enough tweets to both have enough tweets as specified by num_tweets AND to have 
+# enough words for num_words. And, we're going to delete the retweets, so we really
+# have to pad the total tweets to account for that.
+num_tweets_to_query <- if(num_words / words_per_tweet > num_tweets){
+  num_words / words_per_tweet * 2.5
+} else {
+  num_tweets * 2.5
+}
+
+# Twitter API limits check...
+num_tweets_to_query <- ifelse(num_tweets_to_query > 3200, 3200, num_tweets_to_query)
+
+# Make a vector of all users to query
+users <- c(user_highlight, users_compare)
+
+# Add the "@" to the user_highlight for ease of use later
+user_highlight <- paste0("@", user_highlight)
+
+# Create the token. 
+tw_token <- create_token(
+  app = Sys.getenv("TWITTER_APPNAME"), 
+  consumer_key = Sys.getenv("TWITTER_KEY"),
+  consumer_secret = Sys.getenv("TWITTER_SECRET"),
+  access_token = Sys.getenv("TWITTER_ACCESS_TOKEN"),
+  access_secret = Sys.getenv("TWITTER_ACCESS_SECRET"))
+
+# Go ahead and set up the theme we'll use for the visualizations
+theme_main <- theme_light() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+        plot.subtitle = element_text(hjust = 0.5, face = "italic", size = 10),
+        panel.border = element_blank(),
+        axis.title = element_blank(),
+        axis.text.y = element_text(face = "bold", size = 10),
+        axis.text.x = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank())
+
+```
+
+## Get the Tweets
+
+We're going to start by pulling enough tweets to work with, which we'll do one username at a time and then combine into a list for further manipulation. So, we'll set up a function to do that. We'll go ahead and knock out the retweets and pare down the number of columns returned at the same time.
+
+```{r get_tweets}
+# Function to get tweets for a user
+get_tweets <- function(username){
+  
+  cat("Getting tweets for", username)
+  
+  # Get the tweets. 
+  tweets_df <- get_timeline(username, n=num_tweets_to_query)
+  
+  cat(". Total tweets returned:", nrow(tweets_df), "\n")
+  
+  # Remove the retweets, remove tweets from the current day for ease of
+  # replicability, select the columns of interest, strip out usernames and
+  # links from the text
+  tweets_df <- tweets_df %>% 
+    filter(is_retweet == FALSE & as.Date(created_at) < Sys.Date()) %>% 
+    select(screen_name, status_id, created_at, text) %>% 
+    mutate(text = gsub("@\\S+","", text)) %>%               # Remove usernames
+    mutate(text = gsub("https://t.co/.{10}", "", text)) %>%  # Remove links
+    filter(text != "") %>%   # Remove rows where there was no text in the tweets or mutates resulted in no text
+    filter(!nchar(text) <= 5)  # Remove rows that are just an emoji or a couple of spaces
+}
+
+# purrr magic -- get and cleanup the tweets for all users
+all_tweets <- map_dfr(users, get_tweets)
+
+# Add the "@" just so it's clear we/re working with Twitter
+all_tweets <- all_tweets %>% mutate(screen_name = paste0("@", screen_name))
+
+# Take a quick look at the results
+all_tweets %>% select(-status_id) %>% head() %>% kable() %>% 
+  kable_styling() %>% column_spec(2, width = "12em")
+
+```
+
+## Exploration No. 1: Distribution of TTR by User
+
+For this first exploration, we'll treat each tweet as it's own _document_ and, as such, calculate the TTR for each tweet. We'll then evaluate the median TTR and TTR variability for the most recent `r num_tweets` for each user. I have an unhealthy infatuation with boxplots at the moment, so that's what we'll go with for this.
+
+```{r ttr_by_tweet, warning = FALSE}
+
+# We want to first pare down our tweets to just the top num_tweets for each user
+top_tweets <- all_tweets %>% 
+  group_by(screen_name) %>% top_n(num_tweets, wt = created_at) %>% ungroup()
+
+# Unnest to break the tweets into words 
+words_by_tweets <- top_tweets %>% 
+  unnest_tokens(output = word, input = text) %>% 
+  mutate(status_id_num = as.numeric(status_id))  # We'll want a numeric version of this for later
+
+# Check out what this looks like
+head(words_by_tweets) %>% kable() %>% kable_styling()
+
+# Calculate the TTR for each tweet
+ttr_by_tweet <- words_by_tweets %>% 
+  group_by(screen_name, status_id) %>% 
+  summarise(total_words = n(), unique_words = n_distinct(word)) %>% 
+  mutate(ttr = round(unique_words / total_words, 3)) %>% 
+  left_join(top_tweets, by = c(status_id = "status_id")) %>% 
+  select(screen_name = screen_name.x, created_at, status_id, text, 
+         unique_words, total_words, ttr) %>% 
+  ungroup()
+
+# To order the boxplot, we need to grab the median for all of these
+ttr_by_tweet_median <- ttr_by_tweet %>% 
+  group_by(screen_name) %>% 
+  summarise(median_ttr = median(ttr)) %>% 
+  arrange(median_ttr) %>% ungroup()
+
+# Reorder the tweet TTR data by median
+ttr_by_tweet <- ttr_by_tweet %>% 
+  mutate(ttr_highlight = ifelse(tolower(screen_name) == user_highlight, ttr, NA)) %>% 
+  mutate(screen_name = factor(screen_name,
+                              levels = ttr_by_tweet_median$screen_name))
+
+# Do a little cleanup of our workspace
+rm(ttr_by_tweet_median)
+
+# Show what this now looks like
+ttr_by_tweet %>% select(-ttr_highlight) %>% head() %>% kable()  %>% 
+  kable_styling() %>% column_spec(2, width = "12em")
+
+# Plot the full data as a boxplot
+gg_median <- ggplot(ttr_by_tweet, mapping = aes(x = screen_name, y = ttr)) +
+  geom_boxplot(color = "gray50", outlier.colour = "gray70") +
+  geom_boxplot(mapping = aes(y = ttr_highlight), fill = "#006a2f", 
+               outlier_color = "gray70", alpha = 0.5) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,1.05),
+                     labels = scales::percent_format(accuracy=1)) +
+  geom_hline(mapping = aes(yintercept=0)) +
+  labs(title = "Median and Variability of TTRs by Username", 
+       subtitle = paste("Most Recent", num_tweets,"Tweets as of", Sys.Date()-1, 
+                        "(Excluding Retweets)")) +
+  coord_flip() +
+  theme_main +
+  theme(panel.grid.major.x = element_line(color = "gray80"))
+gg_median
+```
+
+Looking at the data this way, there isn't _that_ much variation between the candidate with the highest median TTR (Andrew Yang) and the candidate with the lowest median TTR (Elizabeth Warren). 
+
+_**Note: that's not a mistake with Andrew Yang -- over half of his tweets have a TTR of 100%. This is not as amazing as it may seem, as we'll get to in a bit.**_
+
+Also, from this view into the tweets, Trump isn't particularly repetitive in his word usage. As a matter of fact, it appears that the top quartile of his tweets (by TTR) actually have a TTR of 100%, which means there were  _no repeated words within the tweet_. He's like Kamala Harris in that regard (the fact that I found a similarity between Kamala Harris and Donald Trump may be the most amazing part of this entire analysis).
+
+Now, if we dig a little deeper -- or, if we just think about the TTR formula -- we may wonder if TTR is affected by the number of words in the tweet. Because the denominator of the TTR formula is "total words," it stands to reason that longer tweets are more likely to have repeat words (relatively fewer unique words) and a lower TTR.
+
+Let's check that out by looking at the correlation between the mean number of words per tweet and the mean TTR for each candidate:
+
+```{r scatterplot, warning = FALSE, fig.asp=1}
+# Calcuate the mean words/tweet and mean TTR
+correlation_ttr_by_words <- ttr_by_tweet %>% 
+  group_by(screen_name) %>% 
+  summarise(mean_words_per_tweet = mean(total_words),
+            mean_ttr = mean(ttr)) %>% 
+  # Add a column for the account to highlight that only has that account's data
+  mutate(highlight_mean_words = ifelse(tolower(screen_name) == user_highlight,
+                                       mean_words_per_tweet, NA),
+         highlight_mean_ttr = ifelse(tolower(screen_name) == user_highlight,
+                                     mean_ttr, NA))
+
+# Build a plot
+gg <- ggplot(correlation_ttr_by_words, aes(x = mean_words_per_tweet, 
+                                           y = mean_ttr, label = screen_name)) +
+  # A handy ggforce function to get annotations on a static scatterplot
+  geom_mark_circle(mapping = aes(fill = screen_name), alpha = 0, color = NA,
+                   expand = unit(1, "mm"),
+                   label.fontsize = 8, label.hjust = 0.5, label.colour = "gray40",
+                   con.type = "straight", con.cap = 0, con.colour = "gray80",
+                   show.legend = FALSE) +
+  geom_point(stat = "identity", color = "gray50", size = 2) +
+  # Highlight the user that is of interest
+  geom_point(stat = "identity", mapping = aes(x = highlight_mean_words,
+                                              y = highlight_mean_ttr), 
+             color = "#0060af", size = 3) +
+  scale_x_continuous(expand = c(0,0), limits = c(min(correlation_ttr_by_words$mean_words_per_tweet) - 5,
+                                                 max(correlation_ttr_by_words$mean_words_per_tweet) + 5),
+                     labels = scales::comma) +
+  scale_y_continuous(expand = c(0,0), limits = c(min(correlation_ttr_by_words$mean_ttr) - 0.02,
+                                                 max(correlation_ttr_by_words$mean_ttr) + 0.02),
+                     labels = scales::percent_format(accuracy=1)) +
+  labs(title = "Mean Words per Tweet vs. Mean TTR by Username", 
+       subtitle = paste("Most Recent", num_tweets,"Tweets as of", Sys.Date()-1, 
+                        "(Excluding Retweets)")) +
+  xlab("Mean Words per Tweet") +
+  ylab("Mean TTR") +
+  theme_main +
+  theme(panel.border = element_rect(color = "black", fill = NA),
+        panel.grid.major = element_line(color = "gray90"),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text.x = element_text(size = 10, margin = margin(2,0,2,0)),
+        axis.text.y = element_text(face="plain", margin = margin(0,2,0,2)))
+gg
+
+```
+
+This looks like a pretty clear inverse correlation, no? Logically, this makes some sense: the more words you use in a tweet, the more likely you will be going back to the well of previous words used (common articles, prepositions, conjuctions, etc.). Andrew Yang may be an outlier on that front. But, let's do a simple check of the correlation coefficient with and without the outliers.
+
+The correlation coefficient between `Mean Words per Tweet` and `Mean TTR` for all users is <strong>`r cor(correlation_ttr_by_words$mean_words_per_tweet, correlation_ttr_by_words$mean_ttr)`</strong>.
+
+If we check the correlation coefficient between `Mean Words per Tweet` and `Mean TTR` with Andrew Yang _excluded_, it drops to a <strong>`r cor(filter(correlation_ttr_by_words, screen_name != "@AndrewYang") %>% select(mean_words_per_tweet), filter(correlation_ttr_by_words, screen_name != "@AndrewYang") %>% select(mean_ttr))`</strong>, which is still pretty strong!
+
+We're not working with very many data points here, so we're veering into dangerous data cherrypicking territory at this point, and really should not do that!
+
+Andrew Yang really is something of an outlier. It's not so much that he has a high median TTR (although that is true). It's more that he tends to have very short tweets. While Warren and Sanders (and many of the candidates, as well as Trump) put as much commentary as they can fit into 280 characters and often comment on current events and their policy ideas, Yang's feed is heavy on the retweets (not included in this analysis) and is often seemingly a pithy navel-gazer when it comes to his original tweets: ["Born in October"](https://twitter.com/AndrewYang/status/1183813625322115074), ["That image is funny"](https://twitter.com/AndrewYang/status/1183848149926006784) (replying to himself), ["J-E-T-S"](https://twitter.com/AndrewYang/status/1183501607855706112), etc.
+
+Overall, it appears that tweet _length_ is such a driver of TTR that this initial exploration is more a measure of that than it is a measure of word uniqueness.
+
+## Exploration No. 2: Multiple Tweets As a Single Document
+
+What if, instead of treating each tweet as its own document, we tweeted a collection of tweets as a single document? Maybe it's not the most coherent document (imagine turning in an essay that is simply your last _X_ tweets!), but if James Joyce made it into the canon of great literature, then there must be some place for stream-of-consciousness.
+
+For this second exploration, we're going to take as many tweets as it takes to get ~`r num_words` words for each candidate. For Yang, that will take more tweets than it takes for Sanders, but we'll have a common denominator for our calculation.
+
+```{r words_total_ttr}
+
+# Get the most recent num_words. We already broke out all of the words in words_by_tweets
+# so we can just do some ordering then grab the tweet words that get us over num_words.
+words_by_user <- words_by_tweets %>% 
+  group_by(screen_name, status_id, status_id_num, created_at) %>% 
+  summarise(word_count = n()) %>%    # Calculate the number of words for each tweet
+  ungroup() %>% 
+  arrange(screen_name, desc(status_id_num)) %>%  # Sort by user and then descending by created so we'll use the most recent tweets
+  group_by(screen_name) %>% 
+  mutate(cum_words = cumsum(word_count))  %>%  # create a running total of the number of words
+  ungroup()
+
+# Take a look at what we've done so far
+words_by_user %>% select(-status_id_num) %>% head() %>% kable() %>% kable_styling()
+
+# Filter out the tweets that are not needed to exceed num_words, and then
+# join back to the master list of words and we'll have all of the words we need
+words_by_user <- words_by_user %>% 
+  filter(cum_words <= num_words) %>% 
+  select(screen_name, status_id) %>% 
+  left_join(words_by_tweets, by = c(screen_name = "screen_name", status_id = "status_id"))
+
+# Take a look at the result
+words_by_user %>% select(-status_id_num) %>% head() %>% kable() %>% kable_styling()
+
+# Do a quick check to see what tweets we've pulled in. We just want to see that we're
+# close to num_words for the total, how many tweets are included, and that the newest
+# tweets are pretty recent (we grabbed from the "right end" of the dataset)
+data_check <- words_by_user %>% 
+  group_by(screen_name) %>% 
+  summarise(total_words = n(), total_tweets = n_distinct(status_id),
+            oldest_tweet_date = min(created_at), newest_tweet_date = max(created_at))
+kable(data_check) %>% kable_styling
+rm(data_check)
+```
+
+_&lt;whew!&gt;_
+
+That just gets us to the dataset that we want to work with. Now, we can actually do the analysis (which--shocker--is more straightforward than the data munging we just did).
+
+```{r analyze_words, warning=FALSE}
+
+# Calculate the TTR for the more recent num_words.
+ttr_by_user <- words_by_user %>% 
+  group_by(screen_name) %>% 
+  summarise(total_words = n(), unique_words = n_distinct(word)) %>% 
+  mutate(ttr = round(unique_words / total_words, 3)) %>% 
+  arrange(ttr) %>% 
+  # Add in a column for our highlight user
+  mutate(highlight_ttr = ifelse(tolower(screen_name) == user_highlight, ttr, NA))
+
+# Convert screen_name to a factor so the chart will be ordered from highest to lowest
+ttr_by_user$screen_name = factor(ttr_by_user$screen_name,
+                                 levels = ttr_by_user$screen_name)
+
+gg <- ggplot(ttr_by_user, aes(x = screen_name, y = ttr, label = scales::percent(ttr, accuracy = .1))) +
+  geom_bar(stat = "identity", fill = "gray80") +
+  # Highlight the user that is of interest
+  geom_bar(stat = "identity", mapping = aes(y = highlight_ttr), fill = "#0060af") +
+  geom_text(nudge_y = 0.005, size = 3.5, fontface = "bold", hjust = 0) +
+  geom_hline(yintercept = 0) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0), limits = c(0, max(ttr_by_user$ttr) + 0.05)) +
+  labs(title = "Type-Text Ratio (TTR) by Username", 
+       subtitle = paste0("Most Recent ~", scales::number(num_words, big.mark = ",")," Words Tweeted as of ", Sys.Date()-1, 
+                        " (Excluding Retweets)")) +
+  theme_main 
+gg
+
+```
+
+Alas! There is still nothing dramatic! It appears that anyone who wants to claim Trump has a troglodytian vocabulary in his tweets...well...will have to dig deeper and use either a different methodology or a different comparison set. Actually, by this measure, arguably the _most_ erudite and wonky of the Democratic frontrunners, Elizabeth Warren (@ewarren), has one of the _lowest_ TTRs in her tweets. So, perhaps, while wonky, she is also somewhat repetitive (or, perhaps "on message," and the message gets repeated often?).
+
+## Conclusions
+
+For easy visual comparison, let's look at the results from the original exploration again:
+
+```{r median_gg, echo = FALSE, warning = FALSE}
+gg_median
+```
+
+Trump wound up in roughly the same position with both methods. Many of the candidates actually wound up in a similar spot either way, which isn't necessarily expected. Sanders is the most dramatic exception, in that he had one of the lowest median TTRs when looking at each tweet as its own document, but one of the highest TTRs when looking at a collection of tweets as a single document. That would imply that he's more likely to repeat words _within_ his tweets, but less likely to repeat words (relative to the comparison set) _across_ tweets.
+
+And, of course, I had to check where I, personally, netted out, so I ran the analysis on @[tgwilson](https://twitter.com/tgwilson), too. I came out with a median TTR for my most recent tweets that put me right between @TomSteyer and @KamalaHarris, and an overall TTR for the last `r num_words` words I tweeted of 42.7% (but, given a much lower tweet volume, I had to go all the way back to late July 2019 to have enough tweets to generate that many words!).
+
+I like TTR, though. It's a simple idea, simple to calculate (it's even a function in the `koRpus` package, but it's so easy to calculate that it didn't seem warranted to add another package to the mix), and straightforward to interpret.
+
