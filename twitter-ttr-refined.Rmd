@@ -114,34 +114,39 @@ We're going to start by pulling enough tweets to work with, which we'll do one u
 ```{r get_tweets}
 # Function to get tweets for a user
 get_tweets <- function(username){
-  
+
   cat("Getting tweets for", username)
-  
-  # Get the tweets. 
+
+  # Get the tweets.
   tweets_df <- get_timeline(username, n=num_tweets_to_query)
-  
+
   cat(". Total tweets returned:", nrow(tweets_df), "\n")
-  
+
   # Remove the retweets, remove tweets from the current day for ease of
   # replicability, select the columns of interest, strip out usernames and
   # links from the text
-  tweets_df <- tweets_df %>% 
-    filter(is_retweet == FALSE & as.Date(created_at) < Sys.Date()) %>% 
-    select(screen_name, status_id, created_at, text) %>% 
+  tweets_df <- tweets_df %>%
+    filter(is_retweet == FALSE & as.Date(created_at) < Sys.Date()) %>%
+    select(screen_name, status_id, created_at, text) %>%
     mutate(text = gsub("@\\S+","", text)) %>%               # Remove usernames
     mutate(text = gsub("https://t.co/.{10}", "", text)) %>%  # Remove links
     filter(text != "") %>%   # Remove rows where there was no text in the tweets or mutates resulted in no text
     filter(!nchar(text) <= 5)  # Remove rows that are just an emoji or a couple of spaces
 }
 
-# purrr magic -- get and cleanup the tweets for all users
-all_tweets <- map_dfr(users, get_tweets)
+# I already pulled these tweets, so I've commented out the *actual* call to the function
+# above and am just reading in the results from a saved RDS.
 
-# Add the "@" just so it's clear we/re working with Twitter
-all_tweets <- all_tweets %>% mutate(screen_name = paste0("@", screen_name))
+# # purrr magic -- get and cleanup the tweets for all users
+# all_tweets <- map_dfr(users, get_tweets)
+# 
+# # Add the "@" just so it's clear we/re working with Twitter
+# all_tweets <- all_tweets %>% mutate(screen_name = paste0("@", screen_name))
+
+all_tweets <- readRDS("all_tweets.rds")
 
 # Take a quick look at the results
-all_tweets %>% select(-status_id) %>% head() %>% kable() %>% 
+all_tweets %>% select(-status_id) %>% head() %>% kable() %>%
   kable_styling() %>% column_spec(2, width = "12em")
 
 ```
