@@ -7,7 +7,7 @@ output:
       in_header: header.html
 ---
 
-A recentpodcast referenced Donald Trump's limited vocabulary in his tweets (I honestly don't remember exactly which one). The implication was that, relatively speaking, he used a limited number of unique words. This led me to wonder how that  could be quantified and checked. Which, as tends to happen, led to a passing discussion with [Joe Sutherland](https://twitter.com/J0eSutherland), the head of data science at [Search Discovery](https://searchdiscovery.com), and he immediately noted, "That sounds like a TTR question." And he was right (I'd never heard of TTR, but, then again, I'm not a data scientist nor an NLP expert).
+A recent podcast referenced Donald Trump's limited vocabulary in his tweets (I honestly don't remember exactly which one). The implication was that, relatively speaking, he used a limited number of unique words. This led me to wonder how that  could be quantified and checked. Which, as tends to happen, led to a passing discussion with [Joe Sutherland](https://twitter.com/J0eSutherland), the head of data science at [Search Discovery](https://searchdiscovery.com), and he immediately noted, "That sounds like a TTR question." And he was right (I'd never heard of TTR, but, then again, I'm not a data scientist nor an NLP expert).
 
 That little [If You Give a Pig a Pancake](https://www.amazon.com/If-You-Give-Pig-Pancake/dp/0060266864) scenario then resulted in some research, some R, the remainder of this post, and my [podcast](https://analyticshour.io) co-hosts questioning how I choose to spend my free time on the weekends.
 
